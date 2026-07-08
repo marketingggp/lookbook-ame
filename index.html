@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agente Financeiro — PJ e PF</title>
+<script src="dados.js"></script>
+<style>
+  :root {
+    --navy: #1F2937;
+    --blue: #2563EB;
+    --green: #16A34A;
+    --yellow: #CA8A04;
+    --red: #DC2626;
+    --gray: #6B7280;
+    --bg: #F3F4F6;
+    --card: #FFFFFF;
+    --border: #E5E7EB;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--navy);
+    padding: 20px;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--gray); font-size: 13px; margin-bottom: 20px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card .label { font-size: 12px; color: var(--gray); margin-bottom: 6px; }
+  .card .value { font-size: 22px; font-weight: 700; }
+  .card .value.small { font-size: 15px; font-weight: 600; }
+  .alert {
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .alert.ok { background: #DCFCE7; color: #166534; }
+  .alert.warn { background: #FEF9C3; color: #854D0E; }
+  .alert.danger { background: #FEE2E2; color: #991B1B; }
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  section h2 {
+    font-size: 15px;
+    margin: 0 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--gray); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  .pill {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .pill.pago { background: #DCFCE7; color: #166534; }
+  .pill.aguardando { background: #FEF9C3; color: #854D0E; }
+  .pill.atrasado { background: #FEE2E2; color: #991B1B; }
+  .obs { color: var(--gray); font-size: 12px; font-style: italic; }
+  .totals-row td { font-weight: 700; background: #FAFAFA; }
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 720px) {
+    .two-col { grid-template-columns: 1fr; }
+    table, thead, tbody, th, td, tr { font-size: 12px; }
+  }
+  .footer-note {
+    color: var(--gray);
+    font-size: 12px;
+    text-align: center;
+    margin-top: 24px;
+  }
+</style>
+</head>
+<body>
+
+<h1>💰 Agente Financeiro — Empresa (PJ) + Pessoal (PF)</h1>
+<div class="sub" id="subtitulo"></div>
+
+<div id="alertaMeta" class="alert"></div>
+
+<div class="grid" id="kpisEmpresa"></div>
+
+<section>
+  <h2>📋 Clientes — Contratos e Pagamentos</h2>
+  <table id="tabelaClientes"></table>
+</section>
+
+<div class="two-col">
+  <section>
+    <h2>👥 Funcionários / Prestadores</h2>
+    <table id="tabelaFuncionarios"></table>
+    <div id="podeContratar" style="margin-top:12px;"></div>
+  </section>
+
+  <section>
+    <h2>🏠 Finanças Pessoais</h2>
+    <table id="tabelaPessoal"></table>
+  </section>
+</div>
+
+<div class="footer-note">Atualizado em <span id="dataAtualizacao"></span> · Os dados vêm do arquivo <code>dados.js</code>, que é atualizado pela Claude a cada nova entrada/saída que você informar.</div>
+
+<script>
+function formatBRL(v) {
+  return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function hoje() {
+  return new Date();
+}
+
+function diasNoMes(d) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+}
+
+// Calcula status de um lançamento com base no dia de vencimento (dia do mês) e se já foi pago
+function statusDe(dia, pago) {
+  if (pago) return { texto: '✅ Pago', classe: 'pago' };
+  const diaAtual = hoje().getDate();
+  if (dia && diaAtual > dia) return { texto: '🔴 Atrasado', classe: 'atrasado' };
+  return { texto: '🟡 Aguardando', classe: 'aguardando' };
+}
+
+function pill(status) {
+  return `<span class="pill ${status.classe}">${status.texto}</span>`;
+}
+
+// ---------- Clientes ----------
+function renderClientes() {
+  const tbody = DADOS.clientes.map(c => {
+    const st = statusDe(c.dia, c.pago);
+    return `<tr>
+      <td>${c.cliente}</td>
+      <td>${formatBRL(c.valor)}</td>
+      <td>Dia ${c.dia}</td>
+      <td>${pill(st)}</td>
+      <td class="obs">${c.observacao || ''}</td>
+    </tr>`;
+  }).join('');
+
+  const total = DADOS.clientes.reduce((s, c) => s + c.valor, 0);
+  const recebido = DADOS.clientes.filter(c => c.pago).reduce((s, c) => s + c.valor, 0);
+  const pendente = total - recebido;
+
+  document.getElementById('tabelaClientes').innerHTML = `
+    <thead><tr><th>Cliente</th><th>Valor</th><th>Vencimento</th><th>Status</th><th>Obs.</th></tr></thead>
+    <tbody>${tbody}
+      <tr class="totals-row"><td>TOTAL</td><td>${formatBRL(total)}</td><td colspan="3"></td></tr>
+      <tr class="totals-row"><td>Recebido</td><td>${formatBRL(recebido)}</td><td colspan="3"></td></tr>
+      <tr class="totals-row"><td>Pendente (a receber)</td><td>${formatBRL(pendente)}</td><td colspan="3"></td></tr>
+    </tbody>`;
+
+  return { total, recebido, pendente };
+}
+
+// ---------- Funcionários ----------
+function renderFuncionarios() {
+  const tbody = DADOS.funcionarios.map(f => {
+    const st = statusDe(f.dia, f.pago);
+    return `<tr>
+      <td>${f.nome}<br><span class="obs">${f.cargo}</span></td>
+      <td>${formatBRL(f.valor)}</td>
+      <td>Dia ${f.dia}</td>
+      <td>${pill(st)}</td>
+    </tr>`;
+  }).join('');
+
+  const totalFolha = DADOS.funcionarios.reduce((s, f) => s + f.valor, 0);
+  const pago = DADOS.funcionarios.filter(f => f.pago).reduce((s, f) => s + f.valor, 0);
+  const pendente = totalFolha - pago;
+
+  document.getElementById('tabelaFuncionarios').innerHTML = `
+    <thead><tr><th>Nome</th><th>Valor</th><th>Dia</th><th>Status</th></tr></thead>
+    <tbody>${tbody}
+      <tr class="totals-row"><td>TOTAL FOLHA</td><td>${formatBRL(totalFolha)}</td><td colspan="2"></td></tr>
+      <tr class="totals-row"><td>Pendente</td><td>${formatBRL(pendente)}</td><td colspan="2"></td></tr>
+    </tbody>`;
+
+  // Posso contratar?
+  const custoMedio = totalFolha / DADOS.funcionarios.length;
+  const reservaNecessaria = totalFolha * DADOS.empresa.mesesReserva;
+  const sobra = DADOS.empresa.caixaDisponivel - reservaNecessaria;
+  const podeContratar = sobra >= custoMedio;
+
+  document.getElementById('podeContratar').innerHTML = `
+    <div class="alert ${podeContratar ? 'ok' : 'danger'}" style="margin:0;">
+      ${podeContratar ? '✅ Dá pra contratar mais alguém' : '🔴 Ainda não dá pra contratar'}
+      <div style="font-weight:400; font-size:12px; margin-top:6px;">
+        Caixa disponível: ${formatBRL(DADOS.empresa.caixaDisponivel)} ·
+        Reserva necessária (${DADOS.empresa.mesesReserva}x folha): ${formatBRL(reservaNecessaria)} ·
+        Custo médio por pessoa: ${formatBRL(custoMedio)}
+      </div>
+    </div>`;
+
+  return { totalFolha, pago, pendente };
+}
+
+// ---------- Pessoal ----------
+function renderPessoal() {
+  const totalReceita = DADOS.pessoal.receitas.reduce((s, r) => s + r.valor, 0);
+
+  const tbody = DADOS.pessoal.gastos.map(g => {
+    const st = statusDe(g.dia, g.pago);
+    return `<tr>
+      <td>${g.descricao}<br><span class="obs">${g.categoria}</span></td>
+      <td>${formatBRL(g.valor)}</td>
+      <td>Dia ${g.dia}</td>
+      <td>${pill(st)}</td>
+    </tr>`;
+  }).join('');
+
+  const totalGastos = DADOS.pessoal.gastos.reduce((s, g) => s + g.valor, 0);
+  const saldo = totalReceita - totalGastos;
+
+  document.getElementById('tabelaPessoal').innerHTML = `
+    <thead><tr><th>Descrição</th><th>Valor</th><th>Dia</th><th>Status</th></tr></thead>
+    <tbody>${tbody}
+      <tr class="totals-row"><td>Receita do mês</td><td>${formatBRL(totalReceita)}</td><td colspan="2"></td></tr>
+      <tr class="totals-row"><td>Total gastos + dívidas</td><td>${formatBRL(totalGastos)}</td><td colspan="2"></td></tr>
+      <tr class="totals-row"><td>Saldo do mês</td><td style="color:${saldo >= 0 ? 'var(--green)' : 'var(--red)'}">${formatBRL(saldo)}</td><td colspan="2"></td></tr>
+    </tbody>`;
+}
+
+// ---------- KPIs + Alerta de meta ----------
+function renderKpisEAlerta(clientesResumo) {
+  const meta = DADOS.empresa.metaMes;
+  const faturado = clientesResumo.recebido;
+  const falta = Math.max(meta - faturado, 0);
+  const pct = meta > 0 ? faturado / meta : 0;
+  const d = hoje();
+  const diasRestantes = diasNoMes(d) - d.getDate();
+
+  document.getElementById('kpisEmpresa').innerHTML = `
+    <div class="card"><div class="label">Mês Atual</div><div class="value small">${DADOS.empresa.mesAtual}</div></div>
+    <div class="card"><div class="label">Meta do Mês</div><div class="value">${formatBRL(meta)}</div></div>
+    <div class="card"><div class="label">Faturado até Agora</div><div class="value">${formatBRL(faturado)}</div></div>
+    <div class="card"><div class="label">Falta para Bater a Meta</div><div class="value">${formatBRL(falta)}</div></div>
+    <div class="card"><div class="label">% Atingido</div><div class="value">${(pct * 100).toFixed(0)}%</div></div>
+    <div class="card"><div class="label">A Receber (pendente)</div><div class="value">${formatBRL(clientesResumo.pendente)}</div></div>
+  `;
+
+  let classe = 'warn', texto = '';
+  if (pct >= 1) {
+    classe = 'ok';
+    texto = `✅ Meta batida! Faturou ${formatBRL(faturado)} de ${formatBRL(meta)}.`;
+  } else if (diasRestantes <= 5) {
+    classe = 'danger';
+    texto = `🔴 Atenção: faltam ${formatBRL(falta)} e só restam ${diasRestantes} dia(s) no mês.`;
+  } else {
+    texto = `🟡 Faltam ${formatBRL(falta)} para bater a meta (${diasRestantes} dias restantes).`;
+  }
+  document.getElementById('alertaMeta').className = `alert ${classe}`;
+  document.getElementById('alertaMeta').innerText = texto;
+}
+
+// ---------- Render geral ----------
+document.getElementById('subtitulo').innerText =
+  `Diga pelo chat qualquer entrada ou saída (ex: "recebi 2000 do Jack dia 10", "paguei a Eduarda") e eu atualizo este painel.`;
+document.getElementById('dataAtualizacao').innerText = DADOS.atualizadoEm;
+
+const clientesResumo = renderClientes();
+renderFuncionarios();
+renderPessoal();
+renderKpisEAlerta(clientesResumo);
+</script>
+</body>
+</html>
